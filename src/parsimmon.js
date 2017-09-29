@@ -105,26 +105,26 @@ function unsafeUnion(xs, ys) {
 
 function assertParser(p) {
   if (!isParser(p)) {
-    throw new Error('not a parser: ' + p);
+    throw new Error('not a parser: ' + JSON.stringify(p));
   }
 }
 
 // TODO[ES5]: Switch to Array.isArray eventually.
 function assertArray(x) {
   if (!isArray(x)) {
-    throw new Error('not an array: ' + x);
+    throw new Error('not an array: ' + JSON.stringify(x));
   }
 }
 
 function assertNumber(x) {
   if (typeof x !== 'number') {
-    throw new Error('not a number: ' + x);
+    throw new Error('not a number: ' + JSON.stringify(x));
   }
 }
 
 function assertRegexp(x) {
   if (!(x instanceof RegExp)) {
-    throw new Error('not a regexp: '+x);
+    throw new Error('not a regexp: '+JSON.stringify(x));
   }
   var f = flags(x);
   for (var i = 0; i < f.length; i++) {
@@ -140,13 +140,13 @@ function assertRegexp(x) {
 
 function assertFunction(x) {
   if (typeof x !== 'function') {
-    throw new Error('not a function: ' + x);
+    throw new Error('not a function: ' + JSON.stringify(x));
   }
 }
 
 function assertString(x) {
   if (typeof x !== 'string') {
-    throw new Error('not a string: ' + x);
+    throw new Error('not a string: ' + JSON.stringify(x));
   }
 }
 
@@ -163,8 +163,8 @@ function formatGot(input, error) {
   if (i === input.length) {
     return ', got the end of the input';
   }
-  var prefix = (i > 0 ? '\'...' : '\'');
-  var suffix = (input.length - i > 12 ? '...\'' : '\'');
+  var prefix = (i > 0 ? '\'' : '\'');
+  var suffix = (input.length - i > 12 ? '\'' : '\'');
   return ' at line ' + index.line + ' column ' + index.column
     +  ', got ' + prefix + input.slice(i, i + 12) + suffix;
 }
@@ -184,10 +184,26 @@ function anchoredRegexp(re) {
   return RegExp('^(?:' + re.source + ')', flags(re));
 }
 
+// if x is a parser, returns it
+// if x is a string, returns a string parser
+function mapExpectedParser(x) {
+  if(x instanceof Parsimmon)
+    return x
+  else if(x instanceof RegExp)
+    return regexp(x)
+  else if(typeof(x) === 'string')
+    return string(x)
+  else
+    throw new Error('not a string, regexp, or parser: ' + x);
+}
+
 // -*- Combinators -*-
 
 function seq() {
-  var parsers = [].slice.call(arguments);
+  var parsers = [].slice.call(arguments).map(function(x) {
+    return mapExpectedParser(x)
+  })
+
   var numParsers = parsers.length;
   for (var j = 0; j < numParsers; j += 1) {
     assertParser(parsers[j]);
@@ -210,8 +226,15 @@ function seq() {
 function seqObj() {
   var seenKeys = {};
   var totalKeys = 0;
-  var parsers = [].slice.call(arguments);
+  var parsers = [].slice.call(arguments).map(function(x) {
+      if(isArray(x)) {
+        return [x[0], mapExpectedParser(x[1])]
+      } else {
+        return mapExpectedParser(x)
+      }
+  })
   var numParsers = parsers.length;
+
   for (var j = 0; j < numParsers; j += 1) {
     var p = parsers[j];
     if (isParser(p)) {
@@ -222,6 +245,7 @@ function seqObj() {
         p.length === 2 &&
         typeof p[0] === 'string' &&
         isParser(p[1]);
+
       if (isWellFormed) {
         var key = p[0];
         if (seenKeys[key]) {
@@ -232,14 +256,17 @@ function seqObj() {
         continue;
       }
     }
+
     throw new Error(
       'seqObj arguments must be parsers or ' +
       '[string, parser] array pairs.'
     );
   }
+
   if (totalKeys === 0) {
     throw new Error('seqObj expects at least one named parser, found zero');
   }
+
   return Parsimmon(function(input, i) {
     var result;
     var accum = {};
@@ -295,14 +322,15 @@ function createLanguage(parsers) {
 }
 
 function alt() {
-  var parsers = [].slice.call(arguments);
+  var parsers = [].slice.call(arguments).map(function(x) {
+    return mapExpectedParser(x)
+  })
+
   var numParsers = parsers.length;
   if (numParsers === 0) {
     return fail('zero alternates');
   }
-  for (var j = 0; j < numParsers; j += 1) {
-    assertParser(parsers[j]);
-  }
+
   return Parsimmon(function(input, i) {
     var result;
     for (var j = 0; j < parsers.length; j += 1) {
@@ -416,14 +444,31 @@ _.many = function() {
 _.tie = function() {
   return this.map(function(args) {
     assertArray(args);
-    var s = '';
-    for (var i = 0; i < args.length; i++) {
-      assertString(args[i]);
-      s += args[i];
+
+    try {
+      return tieInternal(args)
+    } catch(e) {
+      if(e.message === 'notAStringList') {
+        throw new Error('Used `tie` on something that isn\'t only a nested array of strings: '+JSON.stringify(args))
+      } else throw e
     }
-    return s;
   });
 };
+
+function tieInternal(list) {
+    var s = [];
+    for (var i = 0; i < list.length; i++) {
+      if(list[i] instanceof Array) {
+          s.push(tieInternal(list[i]))
+      } else if(typeof(list[i]) === 'string') {
+          s.push(list[i])
+      } else {
+        throw new Error('notAStringList')
+      }
+    }
+
+    return s.join('');
+}
 
 _.times = function(min, max) {
   var self = this;
@@ -616,23 +661,17 @@ function fail(expected) {
 }
 
 function lookahead(x) {
-  if (isParser(x)) {
-    return Parsimmon(function(input, i) {
-      var result = x._(input, i);
-      result.index = i;
-      result.value = '';
-      return result;
-    });
-  } else if (typeof x === 'string') {
-    return lookahead(string(x));
-  } else if (x instanceof RegExp) {
-    return lookahead(regexp(x));
-  }
-  throw new Error('not a string, regexp, or parser: ' + x);
+  var parser = mapExpectedParser(x)
+  return Parsimmon(function(input, i) {
+    var result = parser._(input, i);
+    result.index = i;
+    result.value = '';
+    return result;
+  });
 }
 
-function notFollowedBy(parser) {
-  assertParser(parser);
+function notFollowedBy(x) {
+  var parser = mapExpectedParser(x)
   return Parsimmon(function(input, i) {
     var result = parser._(input, i);
     var text = input.slice(i, result.index);
