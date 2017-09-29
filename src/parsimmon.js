@@ -1,10 +1,16 @@
 'use strict';
 
 function Parsimmon(action) {
-  if (!(this instanceof Parsimmon)) {
-    return new Parsimmon(action);
+  var instance = function() {
+     return action.apply(instance, arguments)
   }
-  this._ = action;
+  instance._ = action;
+  instance.__proto__ = Object.assign(_, {
+    call: Function.prototype.call,
+    apply: Function.prototype.apply
+  })
+
+  return instance
 }
 
 var _ = Parsimmon.prototype;
@@ -189,12 +195,22 @@ function anchoredRegexp(re) {
 function mapExpectedParser(x) {
   if(x instanceof Parsimmon)
     return x
+  else {
+    var parser = mapExpectedParserRaw(x)
+    if(parser === x) {
+        throw new Error('not a string, regexp, or parser: ' + x);
+    } else {
+      return parser
+    }
+  }
+}
+function mapExpectedParserRaw(x) {
+  if(typeof(x) === 'string')
+    return string(x)
   else if(x instanceof RegExp)
     return regexp(x)
-  else if(typeof(x) === 'string')
-    return string(x)
   else
-    throw new Error('not a string, regexp, or parser: ' + x);
+    return x
 }
 
 // -*- Combinators -*-
@@ -311,8 +327,26 @@ function createLanguage(parsers) {
   for (var key in parsers) {
     if ({}.hasOwnProperty.call(parsers, key)) {
       (function(key) {
+        var parser = parsers[key]
+        if(parser instanceof RegExp) {
+          var regexParser = regexp(parser)
+          parser = function() {
+            return regexParser
+          }
+        } else if(typeof(parser) === 'string') {
+          var stringParser = string(parser)
+          parser = function() {
+            return stringParser
+          }
+        } else if(parser instanceof Parsimmon) {
+          var parsimmon = parser
+          parser = function() {
+            return parsimmon
+          }
+        }
+
         var func = function() {
-          return parsers[key](language);
+          return parser.apply(parser,arguments);
         };
         language[key] = lazy(func);
       }(key));
@@ -734,10 +768,11 @@ function lazy(desc, f) {
     desc = undefined;
   }
 
-  var parser = Parsimmon(function(input, i) {
+  var parser = Parsimmon(f);
+  parser._ = function(input, i) {
     parser._ = f()._;
     return parser._(input, i);
-  });
+  }
 
   if (desc) {
     return parser.desc(desc);
