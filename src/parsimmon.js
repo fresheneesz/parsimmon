@@ -768,9 +768,14 @@ function lazy(desc, f) {
     desc = undefined;
   }
 
-  var parser = Parsimmon(f);
-  parser._ = function(input, i) {
-    parser._ = f()._;
+  var parser = Parsimmon(function() {
+      var args = arguments
+      return Parsimmon(function(input, i) {
+          return parser_(input,i, args)
+      })
+  });
+  var parser_ = parser._ = function(input, i, args) {
+    parser._ = f.apply(f,args)._;
     return parser._(input, i);
   }
 

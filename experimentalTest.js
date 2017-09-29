@@ -1,4 +1,4 @@
-var Parsimmon = require("./parsimmon/src/parsimmon")
+var Parsimmon = require("./src/parsimmon")
 for(var k in Parsimmon) {
     try {
         eval('var '+k+' = Parsimmon["'+k+'"]')
@@ -17,11 +17,11 @@ var L = createLanguage({
     e: function(e) {
         return string(e)
     },
-    recursive: function() {
-        return seq('f', recursive.atMost(1))
+    recursive: function(letter) {
+        return seq(letter, recursive(letter).atMost(1))
     },
     start: function() {
-        return seq(a,b,c,d,e('e'),recursive)
+        return seq(a,b,c,d,e('e'),recursive('f'))
     }
 })
 for(var k in L) {
