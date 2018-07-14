@@ -150,29 +150,34 @@ function assertString(x) {
   }
 }
 
-function formatExpected(expected) {
-  if (expected.length === 1) {
-    return expected[0];
-  }
-  return 'one of ' + expected.join(', ');
+function formatLine(error) {
+  var index = error.index;
+  return ' at line ' + index.line + ' column ' + index.column
 }
 
-function formatGot(input, error) {
-  var index = error.index;
-  var i = index.offset;
-  if (i === input.length) {
-    return ', got the end of the input';
+function formatExpected(expected) {
+  if (expected.length === 1) {
+    return ', expected '+expected[0];
   }
-  var prefix = (i > 0 ? '\'' : '\'');
-  var suffix = (input.length - i > 12 ? '\'' : '\'');
-  return ' at line ' + index.line + ' column ' + index.column
-    +  ', got ' + prefix + input.slice(i, i + 12) + suffix;
+  return ', expected one of ' + expected.slice(0,-1).join(', ')+', or '+expected.slice(-1)[0];
+}
+
+function formatGot(input, i) {
+  if (i === input.length) {
+    return 'the end of the input';
+  }
+
+  var slice = JSON.stringify(input.slice(i, i + 12)).slice(1,-1) // cut off JSON quotes
+  var delim = (slice.indexOf("'") === -1 ? "'" : '"');
+  var prefix = (i > 0 ? '...'+delim : delim);
+  var suffix = (input.length - i > 12 ? delim+'...' : delim);
+  return prefix + slice + suffix;
 }
 
 function formatError(input, error) {
-  return 'expected ' +
-    formatExpected(error.expected) +
-    formatGot(input, error);
+  return formatLine(error) +
+         formatExpected(error.expected) +
+         ',\n instead got '+formatGot(input, error.index.offset)
 }
 
 function flags(re) {
@@ -189,12 +194,14 @@ function anchoredRegexp(re) {
 function mapExpectedParser(x) {
   if(x instanceof Parsimmon)
     return x
-  else if(x instanceof RegExp)
-    return regexp(x)
-  else if(typeof(x) === 'string')
-    return string(x)
-  else
-    throw new Error('not a string, regexp, or parser: ' + x);
+  else {
+    if(typeof(x) === 'string')
+      return string(x)
+    else if(x instanceof RegExp)
+      return regexp(x)
+    else
+      throw new Error('not a string, regexp, or parser: ' + x)
+  }
 }
 
 // -*- Combinators -*-
@@ -311,8 +318,26 @@ function createLanguage(parsers) {
   for (var key in parsers) {
     if ({}.hasOwnProperty.call(parsers, key)) {
       (function(key) {
+        var parser = parsers[key]
+        if(parser instanceof RegExp) {
+          var regexParser = regexp(parser)
+          parser = function() {
+            return regexParser
+          }
+        } else if(typeof(parser) === 'string') {
+          var stringParser = string(parser)
+          parser = function() {
+            return stringParser
+          }
+        } else if(parser instanceof Parsimmon) {
+          var parsimmon = parser
+          parser = function() {
+            return parsimmon
+          }
+        }
+
         var func = function() {
-          return parsers[key](language);
+          return parser.apply(parser,arguments);
         };
         language[key] = lazy(func);
       }(key));
@@ -574,12 +599,16 @@ _.notFollowedBy = function(x) {
   return this.skip(notFollowedBy(x));
 };
 
-_.desc = function(expected) {
+_.desc = function(description) {
+  return this.expected([description])
+};
+
+_.expected = function(expected) {
   var self = this;
   return Parsimmon(function(input, i) {
     var reply = self._(input, i);
     if (!reply.status) {
-      reply.expected = [expected];
+      reply.expected = expected;
     }
     return reply;
   });
@@ -611,7 +640,7 @@ _.chain = function(f) {
 
 function string(str) {
   assertString(str);
-  var expected = '\'' + str + '\'';
+  var expected = JSON.stringify(str);
   return Parsimmon(function(input, i) {
     var j = i + str.length;
     var head = input.slice(i, j);
@@ -696,13 +725,13 @@ function test(predicate) {
 function oneOf(str) {
   return test(function(ch) {
     return str.indexOf(ch) >= 0;
-  });
+  }).desc("a character in "+JSON.stringify(str));
 }
 
 function noneOf(str) {
   return test(function(ch) {
     return str.indexOf(ch) < 0;
-  });
+  }).desc("a character not in "+JSON.stringify(str));
 }
 
 function custom(parsingFunction) {
